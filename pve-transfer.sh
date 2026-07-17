@@ -10,9 +10,9 @@
 #   none set    : local  -> local    (copy to new ID on this node)
 #
 # Usage:    ./pve-transfer.sh [s=<src-host>] [d=<dst-host>] oid=<source-id> nid=<target-id> st=<storage> [u=<user>] [p=<pass>]
-# Remote:   ./pve-transfer.sh s=pve-1.mein.lan d=pve-2.mein.lan oid=100 nid=102 st=ssd_1tb u=root p=secret
-# Push:     ./pve-transfer.sh d=pve-2.mein.lan oid=100 nid=102 st=ssd_1tb
-# Pull:     ./pve-transfer.sh s=pve-1.mein.lan oid=100 nid=102 st=local-lvm
+# Remote:   ./pve-transfer.sh s=pve-1.example.com d=pve-2.example.com oid=100 nid=102 st=ssd_1tb u=root p=secret
+# Push:     ./pve-transfer.sh d=pve-2.example.com oid=100 nid=102 st=ssd_1tb
+# Pull:     ./pve-transfer.sh s=pve-1.example.com oid=100 nid=102 st=local-lvm
 # Local:    ./pve-transfer.sh oid=100 nid=110 st=local-lvm
 # Note:     Argument order is arbitrary. Aliases: src= dst= storage= user= pass=
 #           No arguments or -h/-help/--help prints usage info.
