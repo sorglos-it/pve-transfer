@@ -3,6 +3,8 @@
 # pve-transfer.sh
 # Transfer an LXC container or VM between PVE nodes (stop -> vzdump ->
 # transfer -> restore -> start). Type (lxc/qemu) is auto-detected.
+# All disks / mount points are included: backup flags are enabled
+# temporarily if needed and reverted afterwards.
 # Any side without a host runs on the LOCAL node:
 #   s= + d= set : remote -> remote
 #   only d= set : local  -> remote   (push local guest to d=)
@@ -35,6 +37,7 @@ usage() {
     echo ""
     echo "Transfers an LXC container or VM between PVE nodes:"
     echo "stop -> vzdump backup -> transfer -> restore -> start. Type is auto-detected."
+    echo "All disks / mount points are included (backup flags enabled temporarily)."
     echo ""
     echo "Any side without a host runs on the LOCAL node:"
     echo "  s= + d= set : remote -> remote"
@@ -43,9 +46,9 @@ usage() {
     echo "  none set    : local  -> local    (copy to new ID on this node)"
     echo ""
     echo "Examples:"
-    echo "  $0 s=pve-1.mein.lan d=pve-2.mein.lan oid=100 nid=102 st=ssd_1tb u=root p=secret"
-    echo "  $0 d=pve-2.mein.lan oid=100 nid=102 st=ssd_1tb"
-    echo "  $0 s=pve-1.mein.lan oid=100 nid=102 st=local-lvm"
+    echo "  $0 s=pve-1.example.com d=pve-2.example.com oid=100 nid=102 st=ssd_1tb u=root p=secret"
+    echo "  $0 d=pve-2.example.com oid=100 nid=102 st=ssd_1tb"
+    echo "  $0 s=pve-1.example.com oid=100 nid=102 st=local-lvm"
     echo "  $0 oid=100 nid=110 st=local-lvm"
     echo ""
     echo "Parameters (order is arbitrary):"
@@ -119,9 +122,53 @@ if [ $DST_REMOTE -eq 1 ]; then D() { RS "$DST" "$1"; }; else D() { bash -c "$1";
 
 side() { [ "$1" -eq 1 ] && echo "remote" || echo "local"; }
 
+# --- Backup flag handling (include ALL disks / mount points) ------------------
+# vzdump skips VM disks with backup=0 and LXC mount points without backup=1.
+# Flags are enabled temporarily before the dump and reverted afterwards.
+REVERT_KEYS=(); REVERT_VALS=()
+
+enable_backup_flags() {
+    local excl line key val newval
+    if [ "$TYPE" = "qemu" ]; then
+        excl=$(S "$CMD config $SID" | grep -E '^(ide|sata|scsi|virtio|efidisk|tpmstate)[0-9]+:' \
+               | grep -v 'media=cdrom' | grep 'backup=0' || true)
+    else
+        excl=$(S "$CMD config $SID" | grep -E '^mp[0-9]+:' | grep -v 'backup=1' || true)
+    fi
+    [ -n "$excl" ] || return 0
+
+    echo "Disks/mount points excluded from backup - enabling temporarily:"
+    local lines=()
+    mapfile -t lines <<< "$excl"
+    for line in "${lines[@]}"; do
+        [ -n "$line" ] || continue
+        key="${line%%:*}"
+        val="${line#*: }"
+        if [ "$TYPE" = "qemu" ]; then
+            newval=$(echo "$val" | sed -E 's/,?backup=0//')
+        else
+            newval="$(echo "$val" | sed -E 's/,?backup=0//'),backup=1"
+        fi
+        S "$CMD set $SID -$key '$newval'"
+        REVERT_KEYS+=("$key"); REVERT_VALS+=("$val")
+        echo "  $key: backup enabled"
+    done
+}
+
+revert_backup_flags() {
+    local i
+    [ ${#REVERT_KEYS[@]} -gt 0 ] || return 0
+    for i in "${!REVERT_KEYS[@]}"; do
+        S "$CMD set $SID -${REVERT_KEYS[$i]} '${REVERT_VALS[$i]}'" || true
+    done
+    echo "Backup flags reverted to original values"
+    REVERT_KEYS=(); REVERT_VALS=()
+}
+
 # --- Cleanup -----------------------------------------------------------------
 TMPDIR_SRC=""; ARCNAME=""
 cleanup() {
+    revert_backup_flags 2>/dev/null || true
     [ -n "$TMPDIR_SRC" ] && S "rm -rf '$TMPDIR_SRC'" 2>/dev/null || true
     if [ $FULLY_LOCAL -eq 0 ] && [ -n "$ARCNAME" ]; then
         D "rm -f '$TMPBASE/$ARCNAME'" 2>/dev/null || true
@@ -144,6 +191,12 @@ D "test ! -e /etc/pve/lxc/$DID.conf && test ! -e /etc/pve/qemu-server/$DID.conf"
 D "pvesm status --storage '$STOR' >/dev/null" \
     || die "Storage '$STOR' not found on $DST"
 
+UNUSED=$(S "$CMD config $SID" | grep -E '^unused[0-9]+:' || true)
+if [ -n "$UNUSED" ]; then
+    echo "WARNING: 'unused' disks are never included in backups and will NOT be transferred:"
+    echo "$UNUSED" | sed 's/^/  /'
+fi
+
 # --- 2/6 Stop ----------------------------------------------------------------
 step "2/6 Stopping $TYPE $SID on $SRC"
 if S "$CMD status $SID" | grep -q running; then
@@ -154,10 +207,12 @@ else
 fi
 
 # --- 3/6 Backup --------------------------------------------------------------
-step "3/6 Backup (vzdump)"
+step "3/6 Backup (vzdump, all disks)"
+enable_backup_flags
 TMPDIR_SRC=$(S "mktemp -d $TMPBASE/pvetransfer.XXXXXX")
 S "chmod 755 '$TMPDIR_SRC'"   # unprivileged CT: vzdump runs tar as mapped uid 100000, needs to traverse dumpdir (mktemp default 700 blocks it)
 S "vzdump $SID --dumpdir '$TMPDIR_SRC' --mode stop --compress zstd"
+revert_backup_flags
 ARCPATH=$(S "ls $TMPDIR_SRC/*.zst" | head -n1)
 [ -n "$ARCPATH" ] || die "No backup archive found"
 ARCNAME=$(basename "$ARCPATH")
