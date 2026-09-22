@@ -1,0 +1,22 @@
+# Erzeugtes
+dist/
+bin/
+obj/
+.pio/
+
+# Laufzeitdaten - Ausnahme: Firmware-Dateisystem
+apps/*/data/
+!apps/firmware*/data/
+
+# Echte Konfiguration und Secrets - nur *.example kommt ins Repo
+apps/*/config/*
+!apps/*/config/*.example
+apps/firmware*/include/config.h
+
+# Fremdcode per Paketmanager
+apps/*/vendor/
+
+# Rueckstaende von Werkzeugen (Windows-Explorer, Claude-Hooks)
+Thumbs.db
+receipts/
+review-receipts/
